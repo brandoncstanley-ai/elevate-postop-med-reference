@@ -407,6 +407,9 @@
       <div class="eyebrow">Clinical decision support</div>
       <h1>Post-Op Medication<br>Draft Builder</h1>
       <p>Build a clear medication reference from the patient’s procedure, allergies, and medical history—then route it to the supervising surgeon for review.</p>
+      <p style="margin-top:10px;padding:10px 14px;border:1px solid #E67A70;border-radius:8px;background:#FDECEA;color:#8A1C13;font-size:13px;font-weight:600;">
+        SAMPLE / COURSEWORK DEMO — This build uses an illustrative post-op protocol modeled on common oral-surgery prescribing patterns. It is not connected to, and does not reproduce, any specific practice's actual live internal protocol. Nothing here is medical advice.
+      </p>
     </div>
     <div class="hero-photo" role="img" aria-label="Generic medication bottle, tablets, capsules, dosing cup, and dental gauze"></div>
   </div>
@@ -464,6 +467,10 @@
         <label class="chip"><input type="checkbox" id="allergyDoxy"> Doxycycline</label>
         <label class="chip"><input type="checkbox" id="allergyRinse"> Mouth rinses (Chlorhexidine/Peridex)</label>
       </div>
+      <label style="display:flex;align-items:center;gap:8px;margin:2px 0 12px;font-size:13px;font-weight:600;">
+        <input type="checkbox" id="nkdaConfirmed">
+        <span>NKDA confirmed (no known drug allergies)</span>
+      </label>
       <label class="field">
         <span class="label-text">Allergy detail / other allergies</span>
         <textarea id="allergyText" placeholder="e.g., reaction type and severity, or anything not listed above"></textarea>
@@ -551,9 +558,9 @@
 <div id="output"></div>
 
 <script>
-const SCAFFOLD = "Elevate Oral Surgery — Post-Op Medication Protocol (practice-protocol-scaffold.md)";
-const MEDS = "Medications Orders (Medications.docx)";
-const GUIDE = "Postoperative Oral Surgery Medication Prescribing Guide.docx";
+const SCAFFOLD = "Sample Post-Op Medication Protocol — illustrative coursework document, not a real practice's live protocol (practice-protocol-scaffold.md)";
+const MEDS = "Sample Medication Order Sheet (Medications.docx)";
+const GUIDE = "Sample Postoperative Oral Surgery Medication Prescribing Guide (illustrative, modeled on common OMS prescribing patterns)";
 
 const PROCEDURE_LABELS = {
   'simple-extraction':'Simple extraction',
@@ -999,6 +1006,7 @@ document.getElementById('generateBtn').addEventListener('click', function(){
   const allergyDoxy = document.getElementById('allergyDoxy').checked;
   const allergyRinse = document.getElementById('allergyRinse').checked;
   const allergyText = document.getElementById('allergyText').value.trim();
+  const nkdaConfirmed = document.getElementById('nkdaConfirmed').checked;
 
   const hxPregnancy = document.getElementById('hxPregnancy').checked;
   const hxRenal = document.getElementById('hxRenal').checked;
@@ -1039,8 +1047,12 @@ document.getElementById('generateBtn').addEventListener('click', function(){
   if(isPediatric && !weightRaw){
     allFlags.unshift({text:'Weight was not entered for a pediatric patient. Weight is required for weight-based dosing — see analgesia/antibiotic sections above.', critical:true});
   }
-  if(!allergyText && !allergyIbuprofen && !allergyTylenol && !allergyNarcotics && !allergyPCN && !allergyCeph && !allergyAzith && !allergyDoxy && !allergyRinse){
-    allFlags.push({text:'No allergy information was entered. Confirm allergy status (including NKDA) before finalizing.', critical:false});
+  const anyAllergySelected = !!(allergyText || allergyIbuprofen || allergyTylenol || allergyNarcotics || allergyPCN || allergyCeph || allergyAzith || allergyDoxy || allergyRinse);
+  if(!anyAllergySelected && !nkdaConfirmed){
+    allFlags.push({text:'No allergy information was entered. This is treated as UNKNOWN, not "no known allergies" — do not assume NKDA. Confirm allergy status directly with the patient before finalizing.', critical:true});
+  }
+  if(nkdaConfirmed && anyAllergySelected){
+    allFlags.push({text:'NKDA and an allergy are both selected, resolve before finalizing.', critical:true});
   }
 
   const procedureLabel = PROCEDURE_LABELS[procedure];
@@ -1059,7 +1071,7 @@ document.getElementById('generateBtn').addEventListener('click', function(){
   if(hxOther) historyBits.push(hxOther);
   const historyText = historyBits.length ? historyBits.join('; ') : 'None reported';
 
-  const allergyBits = [
+  const allergyBitsList = [
     allergyIbuprofen ? 'Ibuprofen/NSAIDs' : null,
     allergyTylenol ? 'Tylenol/Acetaminophen' : null,
     allergyNarcotics ? 'Narcotics/opioids' : null,
@@ -1069,7 +1081,27 @@ document.getElementById('generateBtn').addEventListener('click', function(){
     allergyDoxy ? 'Doxycycline' : null,
     allergyRinse ? 'Mouth rinses (Chlorhexidine/Peridex)' : null,
     allergyText || null
-  ].filter(Boolean).join('; ') || 'None reported';
+  ].filter(Boolean);
+  const allergyBits = allergyBitsList.length
+    ? allergyBitsList.join('; ')
+    : (nkdaConfirmed ? 'NKDA confirmed' : 'Not entered — confirm allergy status');
+
+  const RISK_FACTOR_DEFS = [
+    { key:'pregnancy', label:'Pregnancy', note:'Protocol specifies NSAID avoidance and pregnancy-safe medications only; no specific pregnancy-safe analgesic regimen is named in the uploaded documents — escalate to the surgeon for pregnancy-specific orders.' },
+    { key:'renal', label:'Renal impairment', note:'Renal impairment excludes NSAIDs per protocol; acetaminophen is the non-opioid option unless acetaminophen is also blocked.' },
+    { key:'hepatic', label:'Hepatic impairment', note:'Hepatic impairment excludes acetaminophen and NSAIDs per protocol. If an opioid is needed, the uploaded documents do not specify a hepatic-adjusted dose or duration — confirm with the surgeon.' },
+    { key:'anticoag', label:'Anticoagulant / antiplatelet / bleeding disorder', note:'Anticoagulant/antiplatelet/bleeding disorder excludes NSAIDs per protocol; acetaminophen is the non-opioid option, and a non-diabetic patient on blood thinners may also get a steroid adjunct per the order sheet.' },
+    { key:'diabetic', label:'Diabetes', note:'No standalone diabetes guidance in the uploaded documents. The one documented interaction is that the anticoagulant steroid adjunct (Dexamethasone) is withheld for diabetic patients — confirm with the surgeon for any other combination.' },
+    { key:'substanceHx', label:'Substance use / controlled substance history', note:'Protocol requires checking with the controlled-substance provider (e.g., PDMP) and the patient before prescribing any controlled substance.' },
+    { key:'ponv', label:'Prior PONV / sedation nausea history', note:'Protocol supports an antiemetic (Promethazine 12.5–25mg PRN) for prior PONV/sedation nausea history — not a routine order for every sedation case.' },
+    { key:'refractoryPain', label:'Refractory / chronic pain', note:'Protocol supports a Gabapentin 300mg adjunct for refractory/chronic pain, flagged for additive respiratory-depression risk when combined with opioids or other sedatives.' },
+    { key:'bleeding', label:'Bleeding concerns', note:'Protocol supports a PRN oral tranexamic acid rinse/application for bleeding concerns.' },
+    { key:'tmj', label:'TMJ pain', note:'Protocol substitutes Celebrex 200mg (an NSAID) for TMJ pain and omits a second NSAID (e.g., ibuprofen) to avoid double NSAID dosing.' }
+  ];
+  const riskFactorRows = RISK_FACTOR_DEFS.filter(d => ctx[d.key]);
+  const riskFactorsHtml = riskFactorRows.length
+    ? riskFactorRows.map(d => `<div class="flag-item"><span class="flag-mark">•</span><span><strong>${esc(d.label)}:</strong> ${esc(d.note || 'No specific guidance in the uploaded documents, confirm with surgeon.')}</span></div>`).join('')
+    : `<div class="flag-empty">No risk factors were selected.</div>`;
 
   const recCardsHtml = allRecs.map(r => `
     <div class="rec-card ${r.high ? 'high' : ''}">
@@ -1114,10 +1146,12 @@ document.getElementById('generateBtn').addEventListener('click', function(){
         <div class="doc-section">
           <h3>Flags</h3>
           ${flagsHtml}
+          <h3 style="margin-top:16px;">Risk factors reviewed</h3>
+          ${riskFactorsHtml}
         </div>
       </div>
       <div class="disclaimer-box">
-        This is a draft reference generated from uploaded practice protocols. It is not medical advice and is not a final prescribing decision. A licensed prescriber must review, verify, and approve before any medication order is issued.
+        This is a draft reference generated from an illustrative, coursework sample protocol (not any specific practice's actual live internal protocol). It is not medical advice and is not a final prescribing decision. A licensed prescriber must review, verify, and approve before any medication order is issued.
       </div>
       <div class="sign-row">
         <div><div class="sign-line"></div><span class="sign-label">Approved by</span></div>
