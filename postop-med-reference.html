@@ -706,7 +706,9 @@ function antibioticPlan(ctx){
     flags.push({text:'Infection risk marked Moderate — the protocol calls for extending the duration of the standard regimen (same drug/dose, longer course), but does not specify how many additional days. Confirm the exact duration with the surgeon.', critical:false});
   }
   if(infectionRisk === 'High'){
-    if(allergyPCN){
+    if(allergyPCN && allergyCeph){
+      flags.push({text:'High infection risk with penicillin and cephalosporin allergy: the step-up regimen (Cefdinir + Metronidazole) is not offered because it contains a cephalosporin. No alternative step-up regimen is defined in the uploaded documents; escalate to the surgeon.', critical:true});
+    } else if(allergyPCN){
       recs.push({
         category:'Antibiotic prophylaxis — High infection risk', medication:'Cefdinir + Metronidazole',
         details:'Cefdinir 300mg: 2-tab loading dose, then 1 tab BID until course complete',
@@ -778,7 +780,7 @@ function analgesiaPlan(ctx){
         flags.push({text:'Patient cannot take acetaminophen/Tylenol — the weight-based acetaminophen option was omitted.', critical:false});
       }
       if(!weightKg){
-        flags.push({text:'No weight was entered — pediatric mg/dose could not be calculated. Weight is required before this order can be finalized.', critical:true});
+        flags.push({text:'No usable weight was entered — pediatric mg/dose could not be calculated. A valid measured weight is required before this order can be finalized.', critical:true});
       }
     }
     flags.push({text:'Never exceed the pediatric daily limit or the adult ceiling dose. Routine opioids should be avoided for this age group; reassess pain source if control is inadequate.', critical:false});
@@ -993,31 +995,63 @@ document.getElementById('generateBtn').addEventListener('click', function(){
   const isPediatric = document.getElementById('ageUnder12').checked;
   const isGeriatric = document.getElementById('ageOver70').checked;
 
+  if(isPediatric && isGeriatric){
+    document.getElementById('output').innerHTML = '<div class="doc"><div class="doc-body"><div class="doc-section"><h3>Flags</h3><div class="flag-item critical"><span class="flag-mark">\u26A0</span><span>Both age bands are selected (12 and under, and over 70). Select one before generating a draft.</span></div></div></div></div>';
+    document.getElementById('output').style.display = 'block';
+    return;
+  }
+
   const weightRaw = isPediatric ? parseFloat(document.getElementById('weight').value) : NaN;
   const weightUnit = document.getElementById('weightUnit').value;
-  const weightKg = !isNaN(weightRaw) ? toKg(weightRaw, weightUnit) : null;
+  let weightKg = !isNaN(weightRaw) ? toKg(weightRaw, weightUnit) : null;
+  // Plausibility check for a child 12 and under: 3-70 kg. Outside that range, no weight-based doses are calculated.
+  let weightInvalid = false;
+  if(isPediatric && !isNaN(weightRaw) && weightRaw !== 0){
+    const kgCheck = toKg(weightRaw, weightUnit);
+    if(!(kgCheck >= 3 && kgCheck <= 70)){ weightInvalid = true; weightKg = null; }
+  } else if(isPediatric && weightRaw === 0){ weightInvalid = true; weightKg = null; }
 
-  const allergyIbuprofen = document.getElementById('allergyIbuprofen').checked;
-  const allergyTylenol = document.getElementById('allergyTylenol').checked;
-  const allergyNarcotics = document.getElementById('allergyNarcotics').checked;
-  const allergyPCN = document.getElementById('allergyPCN').checked;
-  const allergyCeph = document.getElementById('allergyCeph').checked;
-  const allergyAzith = document.getElementById('allergyAzith').checked;
-  const allergyDoxy = document.getElementById('allergyDoxy').checked;
-  const allergyRinse = document.getElementById('allergyRinse').checked;
+  let allergyIbuprofen = document.getElementById('allergyIbuprofen').checked;
+  let allergyTylenol = document.getElementById('allergyTylenol').checked;
+  let allergyNarcotics = document.getElementById('allergyNarcotics').checked;
+  let allergyPCN = document.getElementById('allergyPCN').checked;
+  let allergyCeph = document.getElementById('allergyCeph').checked;
+  let allergyAzith = document.getElementById('allergyAzith').checked;
+  let allergyDoxy = document.getElementById('allergyDoxy').checked;
+  let allergyRinse = document.getElementById('allergyRinse').checked;
   const allergyText = document.getElementById('allergyText').value.trim();
   const nkdaConfirmed = document.getElementById('nkdaConfirmed').checked;
 
   const hxPregnancy = document.getElementById('hxPregnancy').checked;
   const hxRenal = document.getElementById('hxRenal').checked;
   const hxHepatic = document.getElementById('hxHepatic').checked;
-  const hxAnticoag = document.getElementById('hxAnticoag').checked;
+  let hxAnticoag = document.getElementById('hxAnticoag').checked;
   const hxDiabetes = document.getElementById('hxDiabetes').checked;
   const hxSubstance = document.getElementById('hxSubstance').checked;
   const hxPONV = document.getElementById('hxPONV').checked;
   const hxLiquid = document.getElementById('hxLiquid').checked;
   const currentMeds = document.getElementById('currentMeds').value.trim();
   const hxOther = document.getElementById('hxOther').value.trim();
+
+  // Free-text safety net: keyword-match the free-text boxes and treat a hit like the matching checkbox.
+  // This is NOT real parsing. It does not understand negation ("no penicillin allergy" still matches),
+  // so every hit is surfaced as a flag for the surgeon to confirm.
+  const textHits = [];
+  function textHit(source, re, label, already){
+    const m = source.match(re);
+    if(m){ if(!already) textHits.push({word:m[0], label}); return true; }
+    return already;
+  }
+  allergyPCN = textHit(allergyText, /penicillin|amoxicillin|amoxil|augmentin|\bpcn\b|cillin/i, 'penicillin allergy', allergyPCN);
+  allergyCeph = textHit(allergyText, /cephalosporin|cefdinir|omnicef|cephalexin|keflex|\bcef[a-z]*/i, 'cephalosporin allergy', allergyCeph);
+  allergyIbuprofen = textHit(allergyText, /ibuprofen|nsaid|advil|motrin|naproxen|aleve|aspirin|celecoxib|celebrex|meloxicam|diclofenac/i, 'NSAID allergy', allergyIbuprofen);
+  allergyNarcotics = textHit(allergyText, /codeine|hydrocodone|oxycodone|opioid|opiate|narcotic|morphine|percocet|vicodin|norco|tramadol/i, 'narcotic allergy', allergyNarcotics);
+  allergyTylenol = textHit(allergyText, /acetaminophen|tylenol|paracetamol/i, 'acetaminophen allergy', allergyTylenol);
+  allergyAzith = textHit(allergyText, /azithromycin|zithromax|z-?pak|macrolide/i, 'azithromycin allergy', allergyAzith);
+  allergyDoxy = textHit(allergyText, /doxycycline|tetracycline|vibramycin|minocycline/i, 'doxycycline allergy', allergyDoxy);
+  allergyRinse = textHit(allergyText, /chlorhexidine|peridex/i, 'chlorhexidine allergy', allergyRinse);
+  const medsCombined = currentMeds + ' ' + hxOther;
+  hxAnticoag = textHit(medsCombined, /warfarin|coumadin|jantoven|eliquis|apixaban|xarelto|rivaroxaban|pradaxa|dabigatran|plavix|clopidogrel|heparin|lovenox|enoxaparin|brilinta|ticagrelor/i, 'anticoagulant/antiplatelet use', hxAnticoag);
 
   const factorRefractory = document.getElementById('factorRefractory').checked;
   const factorBleeding = document.getElementById('factorBleeding').checked;
@@ -1026,6 +1060,16 @@ document.getElementById('generateBtn').addEventListener('click', function(){
   const infectionRisk = document.querySelector('input[name="infectionRisk"]:checked').value;
   const activeInfection = /infection/i.test(hxOther);
 
+  // Celebrex is an NSAID, so it follows the same exclusions as ibuprofen: NSAID allergy, pregnancy,
+  // renal impairment, hepatic impairment, and anticoagulant/antiplatelet/bleeding disorder.
+  const tmjBlockReasons = [];
+  if(allergyIbuprofen) tmjBlockReasons.push('NSAID allergy');
+  if(hxPregnancy) tmjBlockReasons.push('pregnancy');
+  if(hxRenal) tmjBlockReasons.push('renal impairment');
+  if(hxHepatic) tmjBlockReasons.push('hepatic impairment');
+  if(hxAnticoag) tmjBlockReasons.push('anticoagulant/antiplatelet/bleeding disorder');
+  const tmjCelebrexOk = factorTMJ && tmjBlockReasons.length === 0;
+
   const ctx = {
     isPediatric, isGeriatric, weightKg, procedure,
     nsaidBlocked: allergyIbuprofen, apapBlocked: allergyTylenol, narcoticBlocked: allergyNarcotics,
@@ -1033,7 +1077,7 @@ document.getElementById('generateBtn').addEventListener('click', function(){
     pregnancy: hxPregnancy, renal: hxRenal, hepatic: hxHepatic, anticoag: hxAnticoag,
     diabetic: hxDiabetes, substanceHx: hxSubstance,
     infectionRisk, activeInfection, ponv: hxPONV, liquidMeds: hxLiquid,
-    refractoryPain: factorRefractory, bleeding: factorBleeding, tmj: factorTMJ
+    refractoryPain: factorRefractory, bleeding: factorBleeding, tmj: tmjCelebrexOk, tmjRequested: factorTMJ
   };
 
   const abx = antibioticPlan(ctx);
@@ -1053,6 +1097,27 @@ document.getElementById('generateBtn').addEventListener('click', function(){
   }
   if(nkdaConfirmed && anyAllergySelected){
     allFlags.push({text:'NKDA and an allergy are both selected, resolve before finalizing.', critical:true});
+  }
+
+  if(factorTMJ && !tmjCelebrexOk){
+    allFlags.push({text:'TMJ NSAID option withheld: Celebrex (an NSAID) was not offered because of ' + tmjBlockReasons.join(', ') + '. No alternative TMJ regimen is defined in the uploaded documents; escalate to the surgeon.', critical:true});
+  }
+  if(allergyText){
+    const shown = allergyText.length > 120 ? allergyText.slice(0, 120) + '...' : allergyText;
+    allFlags.unshift({text:'Free-text allergy entered ("' + shown + '"). This tool only keyword-matches free text and does not interpret it. Check every antibiotic and analgesic below against this allergy before finalizing.', critical:true});
+  }
+  textHits.filter(h => h.label.indexOf('allergy') !== -1).forEach(h => {
+    allFlags.unshift({text:'Detected "' + h.word + '" in the free-text allergy field and treated it as a ' + h.label + '. The match does not read negations (for example "no penicillin allergy"), so confirm with the patient.', critical:true});
+  });
+  if(currentMeds){
+    const shownMeds = currentMeds.length > 120 ? currentMeds.slice(0, 120) + '...' : currentMeds;
+    allFlags.push({text:'Free-text current medications entered ("' + shownMeds + '"). These are not cross-checked against the recommendations except for anticoagulant/antiplatelet keywords. Review for interactions, NSAID use, and blood thinners before finalizing.', critical:false});
+  }
+  textHits.filter(h => h.label.indexOf('allergy') === -1).forEach(h => {
+    allFlags.push({text:'Detected "' + h.word + '" in the free-text medication/history fields and treated it as ' + h.label + ' (NSAIDs excluded). Confirm with the patient.', critical:true});
+  });
+  if(weightInvalid){
+    allFlags.unshift({text:'The weight entered (' + weightRaw + ' ' + weightUnit + ') is outside the plausible range for a child 12 and under (3 to 70 kg), so no weight-based doses were calculated. Re-enter the measured weight.', critical:true});
   }
 
   const procedureLabel = PROCEDURE_LABELS[procedure];
@@ -1096,7 +1161,7 @@ document.getElementById('generateBtn').addEventListener('click', function(){
     { key:'ponv', label:'Prior PONV / sedation nausea history', note:'Protocol supports an antiemetic (Promethazine 12.5–25mg PRN) for prior PONV/sedation nausea history — not a routine order for every sedation case.' },
     { key:'refractoryPain', label:'Refractory / chronic pain', note:'Protocol supports a Gabapentin 300mg adjunct for refractory/chronic pain, flagged for additive respiratory-depression risk when combined with opioids or other sedatives.' },
     { key:'bleeding', label:'Bleeding concerns', note:'Protocol supports a PRN oral tranexamic acid rinse/application for bleeding concerns.' },
-    { key:'tmj', label:'TMJ pain', note:'Protocol substitutes Celebrex 200mg (an NSAID) for TMJ pain and omits a second NSAID (e.g., ibuprofen) to avoid double NSAID dosing.' }
+    { key:'tmjRequested', label:'TMJ pain', note: ctx.tmj ? 'Protocol substitutes Celebrex 200mg (an NSAID) for TMJ pain and omits a second NSAID (e.g., ibuprofen) to avoid double NSAID dosing.' : 'TMJ pain was selected, but Celebrex (an NSAID) was withheld because of ' + tmjBlockReasons.join(', ') + '. No alternative TMJ regimen is defined in the uploaded documents; escalate to the surgeon.' }
   ];
   const riskFactorRows = RISK_FACTOR_DEFS.filter(d => ctx[d.key]);
   const riskFactorsHtml = riskFactorRows.length
@@ -1131,7 +1196,7 @@ document.getElementById('generateBtn').addEventListener('click', function(){
           <h3>Patient summary</h3>
           <dl class="summary-grid">
             <dt>Age band</dt><dd>${esc(ageLabel)}</dd>
-            <dt>Weight</dt><dd>${weightRaw ? esc(weightRaw) + ' ' + esc(weightUnit) + (weightKg ? ` (${weightKg.toFixed(1)} kg)` : '') : (isPediatric ? 'Not entered' : 'Not applicable')}</dd>
+            <dt>Weight</dt><dd>${weightInvalid ? 'Invalid entry (' + esc(weightRaw) + ' ' + esc(weightUnit) + '), not used' : (weightRaw ? esc(weightRaw) + ' ' + esc(weightUnit) + (weightKg ? ` (${weightKg.toFixed(1)} kg)` : '') : (isPediatric ? 'Not entered' : 'Not applicable'))}</dd>
             <dt>Allergies</dt><dd>${esc(allergyBits)}</dd>
             <dt>Procedure</dt><dd>${esc(procedureLabel)}</dd>
             <dt>Medical history</dt><dd>${esc(historyText)}</dd>
